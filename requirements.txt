@@ -1,0 +1,4 @@
+duckdb
+pandas
+openpyxl
+xlwings
