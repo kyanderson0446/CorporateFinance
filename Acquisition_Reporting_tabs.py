@@ -62,7 +62,6 @@ conn = duckdb.connect(database=':memory:', read_only=False)
 conn.execute('INSTALL spatial;')
 conn.execute('LOAD spatial;')
 
-
 for file in glob(general_path):
     print(file)
     query_str = fr"""SELECT * FROM st_read('{file}', layer='REPORTING');"""
@@ -296,6 +295,10 @@ values = [
 for sheet in wb.sheets:
     # Paste the values starting from cell A8
     sheet.range('A8').value = [[value] for value in values]
+wb.save()
+print("saved")
+time.sleep(1)
+wb.close()
 
 
 
