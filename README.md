@@ -48,7 +48,7 @@ This repository contains Python scripts for mapping financial data and convertin
 
 ### Unacquired_Loads.py
 
-1. Run the script and follow the prompts:
+1. Run the script and monitor the matching:
     ```
     python Unacquired_Loads.py
     ```
