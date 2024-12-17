@@ -52,4 +52,4 @@ This repository contains Python scripts for mapping financial data and convertin
     ```
     python Unacquired_Loads.py
     ```
-
+2. Load the json file of the schema connection
