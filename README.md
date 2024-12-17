@@ -12,7 +12,11 @@ This repository contains Python scripts for mapping financial data and convertin
 - **Purpose**: Converts old financial templates to a new format.
 - **Functionality**: Requires user input to change paths and structure.
 
-### Installation
+### Unacquired_Loads.py
+- **Purpose**: Populate the database with 1000's of deals that PACS did not close on
+- **Functionality**: An algorithm to match deal id's to files for the upload process
+
+#### Installation
 
 1. Clone the repository:
 
@@ -40,5 +44,12 @@ This repository contains Python scripts for mapping financial data and convertin
 1. Run the script and follow the prompts:
     ```
     python PriorTemplate_toNew.py
+    ```
+
+### Unacquired_Loads.py
+
+1. Run the script and follow the prompts:
+    ```
+    python Unacquired_Loads.py
     ```
 
