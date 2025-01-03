@@ -13,6 +13,8 @@ import xlwings as xw
 # Algo
 import rapidfuzz
 from rapidfuzz import process, fuzz
+import logging
+from color_forms import bcolors
 
 
 """
@@ -75,19 +77,18 @@ df = db_fetcher.fetch_data(query="SELECT * FROM acquisition.public.deal", chunks
 df1 = df.copy()
 # Step 4: Close the database connection
 db_fetcher.close_connection()
-print("Data fetching complete.")
+print("Data fetching complete")
 
+# Configure logging to write to a log file
+logging.basicConfig(
+    filename="no_match_log.txt",  # Name of the log file
+    level=logging.INFO,           # Logging level
+    format="%(asctime)s - %(message)s",  # Log format
+    datefmt="%Y-%m-%d %H:%M:%S"         # Date and time format
+)
 
-# deal_id = df1['id']
-# deal_name = df1['deal']
-# deal_facility_name = df1['facility_name']
-# deal_beds = df1['licensed_op_beds']
-
-# deal_df = df1[['id', 'deal', 'facility_name', 'licensed_op_beds']]
-# Load Excel file
-# Get the filename and the name inside the file to confirm.
-
-# Create a function to match facility names
+def log_no_match(potential_deal):
+    logging.info(f"No Possible Match for: {deal_id}-{potential_deal}")
 
 
 def match_facility_name(row, choices, threshold=80):
@@ -110,21 +111,24 @@ def match_facility_name(row, choices, threshold=80):
     return match if score >= threshold else None
 
 
-path = fr"P:\PACS\Finance\Acquistions & New Build\Active\2024 - RealSG AZ-4\Proforma\*Proforma.xlsx"
+# path = fr"P:\PACS\Finance\Acquistions & New Build\Active\2024 - RealSG AZ-4\Proforma\*Proforma.xlsx"
 
-# for potential_deal in df1['facility_name']:
-for potential_deal in glob(path):
+for potential_deal in df1['facility_name']:
+# for potential_deal in glob(path):
     # uncomment when tyler adds it
-    # potential_deal_path = df1[df1['file_path'] == potential_deal]
+    potential_deal_path = df1[df1['file_path'] == potential_deal]
     potential_deal = 'Devon Gables Rehabilitation Center'
+    potential_deal_id = deal_id = df1[df1['id'] == potential_deal]
     matching_row = df1[df1['facility_name'] == potential_deal]
 
     # Extract the licensed_op_beds value from that row
     if not matching_row.empty:
         potential_deal_beds = matching_row['licensed_op_beds'].iloc[0]
-        print(f"Facility: {potential_deal}, Licensed Beds: {potential_deal_beds}")
+        print()
+        print(f"{bcolors.OKGREEN} Deal ID:{bcolors.OKBLUE}{potential_deal_id}{bcolors.OKGREEN}, Facility: {bcolors.OKBLUE}{potential_deal}{bcolors.OKGREEN}, Licensed Beds: {bcolors.OKBLUE}{potential_deal_beds}")
     else:
-        print(f"Facility: {potential_deal} not found in the DataFrame.")
+        print()
+        print(f"{bcolors.FAIL}Facility: {potential_deal} not found in the DataFrame.")
 
     potential_deal_path = fr"P:\PACS\Finance\Acquistions & New Build\Active\2024 - RealSG AZ-4\Proforma"
     # File Path
@@ -145,7 +149,7 @@ for potential_deal in glob(path):
             proforma_file = os.path.basename(proforma)
             proforma_file = proforma_file.replace('.xlsx', '')
             facility_name = proforma_file.split(" - ")[1] if len(proforma_file.split(" - ")) > 1 else None
-            print(facility_name)
+            print(f"{bcolors.OKBLUE}{facility_name}")
 
             # Extract the exact details from the excel workbook
             app = xw.App(visible=False)
@@ -153,135 +157,111 @@ for potential_deal in glob(path):
             xw.ScreenUpdating = False
             xw.Interactive = False
             wb = xw.Book(proforma, update_links=False)
-            in_file_name = wb.sheets("FACILITY INFO").range("B7").value
-            in_file_beds = wb.sheets("FACILITY INFO").range("B10").value
+            try:
+                in_file_name = wb.sheets("FACILITY INFO").range("B7").value
+                in_file_beds = wb.sheets("FACILITY INFO").range("B10").value
+            except:
+                continue
 
-            print(fr"Validating Deal:")
-            print(fr"Deal: {facility_name} -> Facility {in_file_name}")
-            print(potential_deal_beds)
-            print(in_file_beds)
+
+            print(f"{bcolors.OKGREEN}Validating Beds")
+            print("-"*14)
+            print(fr"{bcolors.OKGREEN}Deal: {bcolors.OKBLUE}'{facility_name}' {bcolors.OKGREEN}--> Excel: {bcolors.OKBLUE}'{in_file_name}'")
+            print(f"{bcolors.OKGREEN}Deal Beds: {bcolors.OKBLUE}{potential_deal_beds}")
+            print(f"{bcolors.OKGREEN}Excel Beds: {bcolors.OKBLUE}{in_file_beds}")
+            print(f"{bcolors.OKGREEN}-" * 14)
 
             # Match Deal to File Name
             if match_facility_name(potential_deal, facility_name, threshold=75):
                 if abs(potential_deal_beds - in_file_beds) < 3:
-                    print("Close Match on Beds, Moving Forward to See if Name Matches")
+                    print(f"{bcolors.ENDC}Close Match on Beds, Moving Forward to See if Name Matches")
 
                     # Lower Threshold Based on Bed Count Proximity
                     if match_facility_name(potential_deal, in_file_name, threshold=63):
-                        print("Match Found")
+                        print(f"{bcolors.OKGREEN}Using 'Bed' and 'Name': Match Found\n")
 
                         # ID
                         deal_id = df1[df1['id'] == potential_deal]
                         wb.sheets("DW Upload").range("B3").value = deal_id
                         wb.sheets("DW Upload").range("B4").value = 'default'
-
+                        # wb.save()
+                        wb.close()
                     # If No Match, Flag and Manually Determine
                     else:
                         manual_match = str(
-                            input(fr"Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
-                        if manual_match == True:
-                            print("Match Found")
+                            input(fr"{bcolors.WARNING} Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
+
+                        if manual_match == True or str(manual_match).lower() == 'true':
+                            print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
                             # ID
                             deal_id = df1[df1['id'] == potential_deal]
                             wb.sheets("DW Upload").range("B3").value = deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
                             # wb.save()
+                            wb.close()
                         else:
-                            print(fr"***No Possible Match for: {potential_deal}***")
+                            print(f"{bcolors.FAIL}***No Possible Match for: {potential_deal}***\n")
+                            log_no_match(potential_deal)
+
                 else:
                     # Match on Deal and In-File Name
                     if match_facility_name(potential_deal, in_file_name, threshold=85):
-                        print("Match Found")
+                        print(f"{bcolors.OKGREEN}Using 'Name': Match Found\n")
 
                         # ID
                         deal_id = df1[df1['id'] == potential_deal]
                         wb.sheets("DW Upload").range("B3").value = deal_id
                         wb.sheets("DW Upload").range("B4").value = 'default'
+                        # wb.save()
+                        wb.close()
                     # Manual Match
                     else:
-                        print(fr"***No Possible Match for: {potential_deal}***")
+                        print(f"{bcolors.FAIL}***No Possible Match for: {potential_deal}***\n")
+                        log_no_match(potential_deal)
 
             # If There is a Weak Match on Deal to File Name, Try the In-File Name as an Alternative
             else:
                 # Higher Threshold as This is the Backup
                 if abs(potential_deal_beds - in_file_beds) < 3:
-                    print("Close Match on Beds, Moving Forward to See if Name Matches")
+                    print(f"{bcolors.ENDC}Close Match on Beds, Moving Forward to See if Name Matches..")
                     # Lower Threshold Based on Bed Count Proximity
 
                     if match_facility_name(potential_deal, in_file_name, threshold=85):
-                        print("Match Found")
+                        print(f"{bcolors.OKGREEN} Using 'Bed' and 'Name': Match Found\n")
 
                         # ID
                         deal_id = df1[df1['id'] == potential_deal]
                         wb.sheets("DW Upload").range("B3").value = deal_id
                         wb.sheets("DW Upload").range("B4").value = 'default'
+                        # wb.save()
+                        wb.close()
                     else:
                         manual_match = str(
-                            input(fr"Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
-                        if manual_match == True:
-                            print("Match Found")
+                            input(fr"{bcolors.WARNING}Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
+                        if manual_match == True or str(manual_match).lower() == 'true':
+                            print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
                             # ID
                             deal_id = df1[df1['id'] == potential_deal]
                             wb.sheets("DW Upload").range("B3").value = deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
+                            # wb.save()
+                            wb.close()
                         else:
-                            print(fr"No Possible Match for {potential_deal}")
+                            print(f"{bcolors.FAIL}***No Possible Match for: {potential_deal}***\n")
+                            log_no_match(potential_deal)
                 else:
                     if match_facility_name(potential_deal, in_file_name, threshold=85):
-                        print("Match Found")
+                        print(f"{bcolors.OKGREEN}Using 'Name': Match Found\n")
 
                         # ID
                         deal_id = df1[df1['id'] == potential_deal]
                         wb.sheets("DW Upload").range("B3").value = deal_id
                         wb.sheets("DW Upload").range("B4").value = 'default'
+                        # wb.save()
+                        wb.close()
                     else:
-                        print(fr"No Possible Match for {potential_deal}")
+                        print(f"{bcolors.FAIL}***No Possible Match for: {potential_deal}***\n")
+                        log_no_match(potential_deal)
 
-
-
-
-
-
-
-
-
-
-
-
-            #
-            #
-            #
-            #
-            # # Start of Algo Match
-            # if abs(potential_deal_beds - in_file_beds) < 3:
-            #     print("Close Match on Beds, Moving Forward to See if Name Matches")
-            #     # Lower Threshold Based on Bed Count Proximity
-            #     if match_facility_name(potential_deal, in_file_name, threshold=70):
-            #         print("Match Found")
-            #
-            #         # ID
-            #         deal_id = df1[df1['id']==potential_deal]
-            #         wb.sheets("DW Upload").range("B3").value = deal_id
-            #         wb.sheets("DW Upload").range("B4").value = 'default'
-            #
-            #     else:
-            #         manual_match = str(input(fr"Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
-            #         if manual_match == True:
-            #             print("Match Found")
-            #             # ID
-            #             deal_id = df1[df1['id'] == potential_deal]
-            #             wb.sheets("DW Upload").range("B3").value = deal_id
-            #             wb.sheets("DW Upload").range("B4").value = 'default'
-            # else:
-            #     # Increase the Threshold if This is the Last Resort
-            #     if match_facility_name(potential_deal, in_file_name, threshold=85):
-            #         print("Match Found")
-            #
-            #         # ID
-            #         deal_id = df1[df1['id'] == potential_deal]
-            #         wb.sheets("DW Upload").range("B3").value = deal_id
-            #         wb.sheets("DW Upload").range("B4").value = 'default'
-            #     else:
-            #         print(fr"No Possible Match for {potential_deal}")
-            #
+            app.quit()
 
