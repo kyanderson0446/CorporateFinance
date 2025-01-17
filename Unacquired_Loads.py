@@ -5,6 +5,7 @@ import pyodbc
 from deal_query import DatabaseFetcher
 import json
 import duckdb
+import warnings
 # File Management
 import time
 from datetime import datetime
@@ -26,8 +27,6 @@ import re
 from typing import List, Tuple, Optional, Union
 
 
-
-
 """
 
 Intro:
@@ -47,18 +46,18 @@ based on facility name similarity and bed count proximity. The workflow adjusts 
 
 1. Primary Matching Criteria:
    - Matches are determined by comparing:
-     - Facility Name (string similarity, thresholds of 70%-85%).
+     - Facility Name (string similarity, high threshold)
      - Bed Count (numerical proximity, within 3 beds).
 
 2. Detailed Matching Steps:
    - Start with Name Match:
-     - If the facility name similarity meets a 75% threshold, check the bed count proximity.
-       - If the bed count is within 3, lower the name similarity threshold to 70% to confirm the match.
+     - If the facility name similarity meets a high threshold, check the bed count proximity.
+       - If the bed count is within 6, lower the name similarity threshold to confirm the match.
      - If no match is found, prompt for manual input to verify.
 
    - Fallback Matching:
      - If the initial name match fails, switch to a backup facility name ("in-file name").
-     - Use a stricter 85% name similarity threshold for this fallback check.
+     - Use a stricter name similarity threshold for this fallback check.
 
 3. Output on Successful Match:
    - If a match is confirmed (automatically or manually), the corresponding `deal_id` is retrieved and 
@@ -92,8 +91,6 @@ df2 = df_loaded.copy()
 db_fetcher.close_connection()
 print("Data fetching complete")
 
-
-
 # Configure logging to write to a log file
 logging.basicConfig(
     filename="no_match_log.txt",  # Name of the log file
@@ -101,128 +98,17 @@ logging.basicConfig(
     format="%(asctime)s - %(message)s",  # Log format
     datefmt="%Y-%m-%d %H:%M:%S"         # Date and time format
 )
-
+"""
+Log No Matches
+"""
 def log_no_match(potential_deal_id):
     logging.info(f"No Possible Match for: {potential_deal_id}")
 
-# Comparison Matchers Here
-# def compare_matchers(name1, name2, threshold=85):
-#     """
-#     Compare different text matching algorithms for facility name matching.
-#
-#     Args:
-#         name1 (str): First facility name
-#         name2 (str): Second facility name
-#         threshold (int): Score threshold for considering a match
-#
-#     Returns:
-#         dict: Scores from different matching algorithms
-#     """
-#
-#     def normalize_name(name):
-#         # Convert to lowercase and remove common words/punctuation
-#         name = name.lower()
-#         name = re.sub(r'\b(center|centre|rehabilitation|rehab|facility)\b', '', name)
-#         name = re.sub(r'[^\w\s]', '', name)
-#         return ' '.join(name.split())
-#
-#     # Normalize names
-#     norm1 = normalize_name(name1)
-#     norm2 = normalize_name(name2)
-#
-#     return {
-#         # Token-based comparisons (better for word rearrangement)
-#         "token_sort_ratio": fuzz.token_sort_ratio(norm1, norm2),
-#         "token_set_ratio": fuzz.token_set_ratio(norm1, norm2),
-#
-#         # Sequence-based comparisons (better for typos/spelling variations)
-#         "levenshtein_distance": jellyfish.levenshtein_distance(norm1, norm2),
-#         "jaro_winkler": int(jellyfish.jaro_winkler_similarity(norm1, norm2) * 100),
-#
-#         # Hybrid approaches
-#         "sequence_matcher": int(SequenceMatcher(None, norm1, norm2).ratio() * 100),
-#         "metaphone": jellyfish.metaphone(norm1) == jellyfish.metaphone(norm2),
-#     }
-#
-# # Matching Engine Begins Here
-# def match_facility_name(
-#         row: str,
-#         choices: List[str],
-#         threshold: int = 85,
-#         debug: bool = False
-# ) -> Tuple[Optional[str], float]:
-#     """
-#     Enhanced facility name matcher using multiple algorithms.
-#
-#     Args:
-#         row: The facility name to match
-#         choices: List of possible facility names to match against
-#         threshold: Minimum score to consider a match
-#         debug: If True, print detailed matching information
-#
-#     Returns:
-#         tuple: (best_match, confidence_score) or (None, 0) if no match
-#     """
-#     # Input validation
-#     if not isinstance(choices, (list, tuple)):
-#         raise ValueError(f"choices must be a list or tuple, got {type(choices)}")
-#
-#     if not choices:
-#         return None, 0
-#
-#     if not isinstance(row, str) or len(row.strip()) == 0:
-#         return None, 0
-#
-#     # Filter out any non-string or empty choices
-#     valid_choices = [c for c in choices if isinstance(c, str) and len(c.strip()) > 0]
-#
-#     if debug:
-#         print(f"\nMatching facility: {row}")
-#         print(f"Number of valid choices: {len(valid_choices)}")
-#
-#     best_match = None
-#     best_score = 0
-#
-#     for choice in valid_choices:
-#         if len(choice) <= 1:  # Skip single characters
-#             continue
-#
-#         scores = compare_matchers(row, choice, threshold)
-#
-#         # Calculate composite score
-#         token_score = max(scores['token_sort_ratio'], scores['token_set_ratio'])
-#         sequence_score = scores['jaro_winkler']
-#
-#         # Weighted average (emphasize token-based matching)
-#         composite_score = (token_score * 0.7 + sequence_score * 0.3)
-#
-#         if scores['metaphone']:
-#             composite_score = min(100, composite_score + (10 if scores['metaphone'] else 0))
-#
-#         if debug:
-#             print(f"\nComparing with: {choice}")
-#             print(f"Token score: {token_score}")
-#             print(f"Sequence score: {sequence_score}")
-#             print(f"Composite score: {composite_score}")
-#             print(f"All scores: {scores}")
-#
-#         # Early rejection for clearly different names
-#         if scores['levenshtein_distance'] > min(len(row), len(choice)) / 2:
-#             if debug:
-#                 print(f"Rejected due to high Levenshtein distance: {scores['levenshtein_distance']}")
-#             continue
-#
-#         if composite_score > best_score and composite_score >= threshold:
-#             best_score = composite_score
-#             best_match = choice
-#
-#     if debug:
-#         print(f"\nBest match: {best_match}")
-#         print(f"Best score: {best_score}")
-#
-#     return best_match, best_score
+"""
+Determine if already logged:
 
-# Stop duplicates within the process from any match attempts or loads. Less work.
+Stop duplicates within the process from any match attempts or loads. Less work.
+"""
 def is_duplicate_deal(df_log, in_file_beds, file_facility_name, proforma):
     if df_log.empty:
         return False
@@ -235,7 +121,10 @@ def is_duplicate_deal(df_log, in_file_beds, file_facility_name, proforma):
 
     return match_condition.any()
 
-# Create in-process match logs and export to csv for review
+"""
+Log Matches and save:
+Create in-process match logs and export to csv for review
+"""
 current_date = datetime.now().strftime("%Y-%m-%d")
 csv_path = fr"{current_date}matched_deals.csv"
 def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
@@ -253,6 +142,10 @@ def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
 # Log files that have already been matched
 df_log = pd.DataFrame(columns=["Deal ID", "Beds", "File Name", "File Path"])
 
+"""
+Start of Processing and File Loops
+"""
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 for potential_deal in df1['facility_name']: # Loop through all deals as there will be duplicate names but unique deals tied to them
     # Is the load already pushed to the table? Stop the proforma that already exists
@@ -318,6 +211,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                     "File Path": proforma
                 }
                 # Create Dataframe for each Deal Folder
+
                 df_excel = pd.concat([df_excel, pd.DataFrame([new_row])], ignore_index=True)
 
                 if is_duplicate_deal(df_log, in_file_beds, file_facility_name, proforma):
@@ -358,6 +252,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 print(
                                     f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
                             else:
+                                conn.close()
                                 continue
                             # ID
                             locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
@@ -367,17 +262,14 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                             xw.ScreenUpdating = False
                             xw.Interactive = False
                             wb = xw.Book(open_file, update_links=False)
-                            locate_deal_id = df1[df1['facility_name'] == potential_deal]
-                            deal_id = locate_deal_id['id'].iloc[0]
-
-                            wb.sheets("DW Upload").range("B3").value = deal_id
+                            wb.sheets("DW Upload").range("B3").value = potential_deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
                             # wb.save()
                             wb.close()
                             app.quit()
                             # create a matches log
-                            df_log = matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma)
-
+                            df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                            conn.close()
                             break
                         # If No Match, Flag and Manually Determine
                         else:
@@ -398,17 +290,17 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 xw.ScreenUpdating = False
                                 xw.Interactive = False
                                 wb = xw.Book(open_file, update_links=False)
-                                locate_deal_id = df1[df1['facility_name'] == potential_deal]
-                                deal_id = locate_deal_id.iloc[0]
-                                wb.sheets("DW Upload").range("B3").value = deal_id
+                                wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                 wb.sheets("DW Upload").range("B4").value = 'default'
                                 # wb.save()
                                 wb.close()
                                 app.quit()
-                                df_log = matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma)
+                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                                conn.close()
                                 break
                             else:
                                 print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
+                                conn.close()
 
                     # This is When the File Name was a Close Match but the Bed Count Fails
                     # Increase the Threshold Here as it Requires Matching on File Name and In_File Name
@@ -426,6 +318,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 print(
                                     f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
                             else:
+                                conn.close()
                                 continue
                             # ID
                             locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
@@ -435,17 +328,17 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                             xw.ScreenUpdating = False
                             xw.Interactive = False
                             wb = xw.Book(open_file, update_links=False)
-                            locate_deal_id = df1[df1['facility_name'] == potential_deal]
-                            deal_id = locate_deal_id.iloc[0]
-                            wb.sheets("DW Upload").range("B3").value = deal_id
+                            wb.sheets("DW Upload").range("B3").value = potential_deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
                             # wb.save()
                             wb.close()
                             app.quit()
-                            df_log = matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma)
+                            df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                            conn.close()
                             break
                         else:
                             print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
+                            conn.close()
 
                 # If There is a Weak Match on Deal to File Name, Try the In-File Name as an Alternative
                 else:
@@ -478,14 +371,13 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 xw.ScreenUpdating = False
                                 xw.Interactive = False
                                 wb = xw.Book(open_file, update_links=False)
-                                locate_deal_id = df1[df1['facility_name'] == potential_deal]
-                                deal_id = locate_deal_id.iloc[0]
-                                wb.sheets("DW Upload").range("B3").value = deal_id
+                                wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                 wb.sheets("DW Upload").range("B4").value = 'default'
                                 # wb.save()
                                 wb.close()
                                 app.quit()
-                                df_log = matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma)
+                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                                conn.close()
                                 break
                             else:
                                 """
@@ -504,17 +396,17 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                     xw.ScreenUpdating = False
                                     xw.Interactive = False
                                     wb = xw.Book(open_file, update_links=False)
-                                    locate_deal_id = df1[df1['facility_name'] == potential_deal]
-                                    deal_id = locate_deal_id.iloc[0]
-                                    wb.sheets("DW Upload").range("B3").value = deal_id
+                                    wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                     wb.sheets("DW Upload").range("B4").value = 'default'
                                     # wb.save()
                                     wb.close()
                                     app.quit()
-                                    df_log = matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma)
+                                    df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                                    conn.close()
                                     break
                                 else:
                                     print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
+                                    conn.close()
 
                         else:
                             """
@@ -533,18 +425,19 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 xw.ScreenUpdating = False
                                 xw.Interactive = False
                                 wb = xw.Book(open_file, update_links=False)
-                                locate_deal_id = df1[df1['facility_name'] == potential_deal]
-                                deal_id = locate_deal_id.iloc[0]
-                                wb.sheets("DW Upload").range("B3").value = deal_id
+                                wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                 wb.sheets("DW Upload").range("B4").value = 'default'
                                 # wb.save()
                                 wb.close()
                                 app.quit()
-                                df_log = matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma)
+                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                                conn.close()
                                 break
                             else:
                                 print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
+                                conn.close()
 
     except:
         print(f"{bcolors.FAIL}***No Possible Match for: {potential_deal_id}***")
         log_no_match(potential_deal_id)
+
