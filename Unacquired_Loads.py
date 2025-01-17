@@ -7,11 +7,13 @@ import json
 import duckdb
 # File Management
 import time
+from datetime import datetime
 import os
 from glob import glob
 # Excel
 import xlwings as xw
 # Algo
+from matchOptions import FacilityNameMatcher
 import rapidfuzz
 import logging
 from color_forms import bcolors
@@ -83,10 +85,14 @@ db_fetcher = DatabaseFetcher(url)
 db_fetcher.connect()
 # Step 3
 df = db_fetcher.fetch_data(query="SELECT * FROM acquisition.public.deal", chunksize=10000)
+df_loaded = db_fetcher.fetch_data(query="SELECT Distinct(acquisition_id) FROM public.proforma", chunksize=1000)
 df1 = df.copy()
+df2 = df_loaded.copy()
 # Step 4: Close the database connection
 db_fetcher.close_connection()
 print("Data fetching complete")
+
+
 
 # Configure logging to write to a log file
 logging.basicConfig(
@@ -100,123 +106,123 @@ def log_no_match(potential_deal_id):
     logging.info(f"No Possible Match for: {potential_deal_id}")
 
 # Comparison Matchers Here
-def compare_matchers(name1, name2, threshold=85):
-    """
-    Compare different text matching algorithms for facility name matching.
+# def compare_matchers(name1, name2, threshold=85):
+#     """
+#     Compare different text matching algorithms for facility name matching.
+#
+#     Args:
+#         name1 (str): First facility name
+#         name2 (str): Second facility name
+#         threshold (int): Score threshold for considering a match
+#
+#     Returns:
+#         dict: Scores from different matching algorithms
+#     """
+#
+#     def normalize_name(name):
+#         # Convert to lowercase and remove common words/punctuation
+#         name = name.lower()
+#         name = re.sub(r'\b(center|centre|rehabilitation|rehab|facility)\b', '', name)
+#         name = re.sub(r'[^\w\s]', '', name)
+#         return ' '.join(name.split())
+#
+#     # Normalize names
+#     norm1 = normalize_name(name1)
+#     norm2 = normalize_name(name2)
+#
+#     return {
+#         # Token-based comparisons (better for word rearrangement)
+#         "token_sort_ratio": fuzz.token_sort_ratio(norm1, norm2),
+#         "token_set_ratio": fuzz.token_set_ratio(norm1, norm2),
+#
+#         # Sequence-based comparisons (better for typos/spelling variations)
+#         "levenshtein_distance": jellyfish.levenshtein_distance(norm1, norm2),
+#         "jaro_winkler": int(jellyfish.jaro_winkler_similarity(norm1, norm2) * 100),
+#
+#         # Hybrid approaches
+#         "sequence_matcher": int(SequenceMatcher(None, norm1, norm2).ratio() * 100),
+#         "metaphone": jellyfish.metaphone(norm1) == jellyfish.metaphone(norm2),
+#     }
+#
+# # Matching Engine Begins Here
+# def match_facility_name(
+#         row: str,
+#         choices: List[str],
+#         threshold: int = 85,
+#         debug: bool = False
+# ) -> Tuple[Optional[str], float]:
+#     """
+#     Enhanced facility name matcher using multiple algorithms.
+#
+#     Args:
+#         row: The facility name to match
+#         choices: List of possible facility names to match against
+#         threshold: Minimum score to consider a match
+#         debug: If True, print detailed matching information
+#
+#     Returns:
+#         tuple: (best_match, confidence_score) or (None, 0) if no match
+#     """
+#     # Input validation
+#     if not isinstance(choices, (list, tuple)):
+#         raise ValueError(f"choices must be a list or tuple, got {type(choices)}")
+#
+#     if not choices:
+#         return None, 0
+#
+#     if not isinstance(row, str) or len(row.strip()) == 0:
+#         return None, 0
+#
+#     # Filter out any non-string or empty choices
+#     valid_choices = [c for c in choices if isinstance(c, str) and len(c.strip()) > 0]
+#
+#     if debug:
+#         print(f"\nMatching facility: {row}")
+#         print(f"Number of valid choices: {len(valid_choices)}")
+#
+#     best_match = None
+#     best_score = 0
+#
+#     for choice in valid_choices:
+#         if len(choice) <= 1:  # Skip single characters
+#             continue
+#
+#         scores = compare_matchers(row, choice, threshold)
+#
+#         # Calculate composite score
+#         token_score = max(scores['token_sort_ratio'], scores['token_set_ratio'])
+#         sequence_score = scores['jaro_winkler']
+#
+#         # Weighted average (emphasize token-based matching)
+#         composite_score = (token_score * 0.7 + sequence_score * 0.3)
+#
+#         if scores['metaphone']:
+#             composite_score = min(100, composite_score + (10 if scores['metaphone'] else 0))
+#
+#         if debug:
+#             print(f"\nComparing with: {choice}")
+#             print(f"Token score: {token_score}")
+#             print(f"Sequence score: {sequence_score}")
+#             print(f"Composite score: {composite_score}")
+#             print(f"All scores: {scores}")
+#
+#         # Early rejection for clearly different names
+#         if scores['levenshtein_distance'] > min(len(row), len(choice)) / 2:
+#             if debug:
+#                 print(f"Rejected due to high Levenshtein distance: {scores['levenshtein_distance']}")
+#             continue
+#
+#         if composite_score > best_score and composite_score >= threshold:
+#             best_score = composite_score
+#             best_match = choice
+#
+#     if debug:
+#         print(f"\nBest match: {best_match}")
+#         print(f"Best score: {best_score}")
+#
+#     return best_match, best_score
 
-    Args:
-        name1 (str): First facility name
-        name2 (str): Second facility name
-        threshold (int): Score threshold for considering a match
-
-    Returns:
-        dict: Scores from different matching algorithms
-    """
-
-    def normalize_name(name):
-        # Convert to lowercase and remove common words/punctuation
-        name = name.lower()
-        name = re.sub(r'\b(center|centre|rehabilitation|rehab|facility)\b', '', name)
-        name = re.sub(r'[^\w\s]', '', name)
-        return ' '.join(name.split())
-
-    # Normalize names
-    norm1 = normalize_name(name1)
-    norm2 = normalize_name(name2)
-
-    return {
-        # Token-based comparisons (better for word rearrangement)
-        "token_sort_ratio": fuzz.token_sort_ratio(norm1, norm2),
-        "token_set_ratio": fuzz.token_set_ratio(norm1, norm2),
-
-        # Sequence-based comparisons (better for typos/spelling variations)
-        "levenshtein_distance": jellyfish.levenshtein_distance(norm1, norm2),
-        "jaro_winkler": int(jellyfish.jaro_winkler_similarity(norm1, norm2) * 100),
-
-        # Hybrid approaches
-        "sequence_matcher": int(SequenceMatcher(None, norm1, norm2).ratio() * 100),
-        "metaphone": jellyfish.metaphone(norm1) == jellyfish.metaphone(norm2),
-    }
-
-# Matching Engine Begins Here
-def match_facility_name(
-        row: str,
-        choices: List[str],
-        threshold: int = 85,
-        debug: bool = False
-) -> Tuple[Optional[str], float]:
-    """
-    Enhanced facility name matcher using multiple algorithms.
-
-    Args:
-        row: The facility name to match
-        choices: List of possible facility names to match against
-        threshold: Minimum score to consider a match
-        debug: If True, print detailed matching information
-
-    Returns:
-        tuple: (best_match, confidence_score) or (None, 0) if no match
-    """
-    # Input validation
-    if not isinstance(choices, (list, tuple)):
-        raise ValueError(f"choices must be a list or tuple, got {type(choices)}")
-
-    if not choices:
-        return None, 0
-
-    if not isinstance(row, str) or len(row.strip()) == 0:
-        return None, 0
-
-    # Filter out any non-string or empty choices
-    valid_choices = [c for c in choices if isinstance(c, str) and len(c.strip()) > 0]
-
-    if debug:
-        print(f"\nMatching facility: {row}")
-        print(f"Number of valid choices: {len(valid_choices)}")
-
-    best_match = None
-    best_score = 0
-
-    for choice in valid_choices:
-        if len(choice) <= 1:  # Skip single characters
-            continue
-
-        scores = compare_matchers(row, choice, threshold)
-
-        # Calculate composite score
-        token_score = max(scores['token_sort_ratio'], scores['token_set_ratio'])
-        sequence_score = scores['jaro_winkler']
-
-        # Weighted average (emphasize token-based matching)
-        composite_score = (token_score * 0.7 + sequence_score * 0.3)
-
-        if scores['metaphone']:
-            composite_score = min(100, composite_score + (10 if scores['metaphone'] else 0))
-
-        if debug:
-            print(f"\nComparing with: {choice}")
-            print(f"Token score: {token_score}")
-            print(f"Sequence score: {sequence_score}")
-            print(f"Composite score: {composite_score}")
-            print(f"All scores: {scores}")
-
-        # Early rejection for clearly different names
-        if scores['levenshtein_distance'] > min(len(row), len(choice)) / 2:
-            if debug:
-                print(f"Rejected due to high Levenshtein distance: {scores['levenshtein_distance']}")
-            continue
-
-        if composite_score > best_score and composite_score >= threshold:
-            best_score = composite_score
-            best_match = choice
-
-    if debug:
-        print(f"\nBest match: {best_match}")
-        print(f"Best score: {best_score}")
-
-    return best_match, best_score
-
-
+# Stop duplicates within the process from any match attempts or loads. Less work.
 def is_duplicate_deal(df_log, in_file_beds, file_facility_name, proforma):
     if df_log.empty:
         return False
@@ -229,7 +235,9 @@ def is_duplicate_deal(df_log, in_file_beds, file_facility_name, proforma):
 
     return match_condition.any()
 
-
+# Create in-process match logs and export to csv for review
+current_date = datetime.now().strftime("%Y-%m-%d")
+csv_path = fr"{current_date}matched_deals.csv"
 def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
     new_row = {
         "Deal ID": deal_id,
@@ -239,14 +247,17 @@ def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
     }
     # Create Dataframe for each Deal Folder
     df_log = pd.concat([df_log, pd.DataFrame([new_row])], ignore_index=True)
+    df_log.to_csv(csv_path, index=False)
     return df_log  # Return the updated dataframe
-
 
 # Log files that have already been matched
 df_log = pd.DataFrame(columns=["Deal ID", "Beds", "File Name", "File Path"])
 
 
 for potential_deal in df1['facility_name']: # Loop through all deals as there will be duplicate names but unique deals tied to them
+    # Is the load already pushed to the table? Stop the proforma that already exists
+    if potential_deal in df2['acquisition_id']:
+        continue
     deal_data = df1[df1['facility_name'] == potential_deal]
     potential_deal_path = deal_data['file_path'].iloc[0]
     potential_deal_id = deal_data['id'].iloc[0]
@@ -299,7 +310,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
 
 
                 in_file_name = df_file.iloc[6, 1]
-                in_file_beds = df_file.iloc[9, 1]
+                in_file_beds = float(df_file.iloc[9, 1])
                 new_row = {
                     "In File Name": in_file_name,
                     "Beds": in_file_beds,
@@ -322,7 +333,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                 """
                 1. Proforma -> File Name 
                 """
-                match_1 = match_facility_name(potential_deal, files_in_folder, threshold=98)
+                match_1 = FacilityNameMatcher.match_facility_name(potential_deal, files_in_folder, threshold=98)
                 if match_1[0] is not None:  # Check explicitly if match is not None
                     matched_value = match_1[0]
 
@@ -338,14 +349,14 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                         1. Proforma -> File Name -> Bed -> In File Name
                         """
                         file_name_choices = temp_df['In File Name'].to_list()
-                        match_5 = match_facility_name(potential_deal, file_name_choices, threshold=95)
+                        match_5 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=95)
                         if match_5[0] is not None:  # Check explicitly if match is not None
                             in_file_name_match = match_5[0]
                             # If there a duplicate In File Names from the files
                             in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             if index == in_file_index:
                                 print(
-                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {matched_value}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
+                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
                             else:
                                 continue
                             # ID
@@ -406,14 +417,14 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                         3. Proforma -> File Name -> In File Name. Beds were not close but try to match
                         """
                         file_name_choices = temp_df['In File Name'].to_list()
-                        match_4 = match_facility_name(potential_deal, file_name_choices, threshold=95)
+                        match_4 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=95)
                         if match_4[0] is not None:  # Check explicitly if match is not None
                             in_file_name_match = match_4[0]
-                            index = df_excel[df_excel['File Name'] == in_file_name_match].index[0]
-                            in_file_index = df_excel[df_excel['File Name'] == in_file_name_match].index[0]
+                            index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
+                            in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             if index == in_file_index:
                                 print(
-                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {matched_value}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
+                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
                             else:
                                 continue
                             # ID
@@ -442,12 +453,12 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                     2. Proforma -> In File name
                     """
                     file_name_choices = df_excel['In File Name'].to_list()
-                    match_2 = match_facility_name(potential_deal, file_name_choices, threshold=85)
+                    match_2 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=85)
                     if match_2[0] is not None:  # Check explicitly if match is not None
-                        matched_value = match_2[0]
-                        temp_df = df_excel[df_excel['In File Name'] == matched_value]
+                        in_file_name_match = match_2[0]
+                        temp_df = df_excel[df_excel['In File Name'] == in_file_name_match]
                         file_beds = float(temp_df['Beds'].iloc[0])
-                        index = df_excel[df_excel['In File Name'] == matched_value].index[0]
+                        index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
 
                         # Higher Threshold as This is the Backup
                         """
@@ -455,9 +466,10 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                         """
                         if abs(potential_deal_beds - in_file_beds) < 6:
                             file_name_choices = temp_df['In File Name'].to_list()
+                            in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             if index == in_file_index:
                                 print(
-                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {matched_value}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
+                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
                                 # ID
                                 locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
                                 open_file = locate_path['File Path'].iloc[0]
