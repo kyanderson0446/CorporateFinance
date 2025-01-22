@@ -74,6 +74,7 @@ Key Notes:
 
 """
 
+save_proforma = r"E:\Unacquired"
 
 # DB Login
 with open('conn_string.json') as login_file:
@@ -84,16 +85,28 @@ db_fetcher = DatabaseFetcher(url)
 db_fetcher.connect()
 # Step 3
 df = db_fetcher.fetch_data(query="SELECT * FROM acquisition.public.deal", chunksize=10000)
+# Proforma Table
 df_loaded = db_fetcher.fetch_data(query="SELECT Distinct(acquisition_id) FROM public.proforma", chunksize=1000)
 df1 = df.copy()
+print(df1['file_path'].info())
+try:
+    df1['file_path'] = df1['file_path'].str.replace(r'\\PACS', '', regex=True) #VM doesn't play nice
+except:
+    df1['file_path'] = df1['file_path'].str.replace(r'\PACS', '', regex=True)  # VM doesn't play nice
+
+# The 96 line proforma table we are popuplating
 df2 = df_loaded.copy()
 # Step 4: Close the database connection
 db_fetcher.close_connection()
 print("Data fetching complete")
 
+"""
+Logging
+"""
+
 # Configure logging to write to a log file
 logging.basicConfig(
-    filename="no_match_log.txt",  # Name of the log file
+    filename=fr"{save_proforma}\no_match_log.txt",  # Name of the log file
     level=logging.INFO,           # Logging level
     format="%(asctime)s - %(message)s",  # Log format
     datefmt="%Y-%m-%d %H:%M:%S"         # Date and time format
@@ -126,7 +139,8 @@ Log Matches and save:
 Create in-process match logs and export to csv for review
 """
 current_date = datetime.now().strftime("%Y-%m-%d")
-csv_path = fr"{current_date}matched_deals.csv"
+csv_path = fr"{save_proforma}\{current_date} - matched_deals.csv" # Save out the matches log
+
 def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
     new_row = {
         "Deal ID": deal_id,
@@ -149,11 +163,14 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 for potential_deal in df1['facility_name']: # Loop through all deals as there will be duplicate names but unique deals tied to them
     # Is the load already pushed to the table? Stop the proforma that already exists
-    if potential_deal in df2['acquisition_id']:
-        continue
+    
     deal_data = df1[df1['facility_name'] == potential_deal]
     potential_deal_path = deal_data['file_path'].iloc[0]
     potential_deal_id = deal_data['id'].iloc[0]
+    
+    if potential_deal_id in df2['acquisition_id']:
+        continue
+    
     try:
         if potential_deal_path is not None:
             pass
@@ -264,7 +281,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                             wb = xw.Book(open_file, update_links=False)
                             wb.sheets("DW Upload").range("B3").value = potential_deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
-                            # wb.save()
+                            wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                             wb.close()
                             app.quit()
                             # create a matches log
@@ -292,7 +309,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 wb = xw.Book(open_file, update_links=False)
                                 wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                 wb.sheets("DW Upload").range("B4").value = 'default'
-                                # wb.save()
+                                wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                                 wb.close()
                                 app.quit()
                                 df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
@@ -330,7 +347,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                             wb = xw.Book(open_file, update_links=False)
                             wb.sheets("DW Upload").range("B3").value = potential_deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
-                            # wb.save()
+                            wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                             wb.close()
                             app.quit()
                             df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
@@ -373,7 +390,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 wb = xw.Book(open_file, update_links=False)
                                 wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                 wb.sheets("DW Upload").range("B4").value = 'default'
-                                # wb.save()
+                                wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                                 wb.close()
                                 app.quit()
                                 df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
@@ -385,7 +402,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 """
                                 manual_match = str(
                                     input(
-                                        fr"{bcolors.WARNING}Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
+                                        fr"{bcolors.WARNING}Deal:{potential_deal} -> {in_file_name}, is it a match? True or False: "))
                                 if manual_match == True or str(manual_match).lower() == 'true':
                                     print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
                                     # ID
@@ -398,7 +415,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                     wb = xw.Book(open_file, update_links=False)
                                     wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                     wb.sheets("DW Upload").range("B4").value = 'default'
-                                    # wb.save()
+                                    wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                                     wb.close()
                                     app.quit()
                                     df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
@@ -409,33 +426,9 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                     conn.close()
 
                         else:
-                            """
-                            No Match on File Name, In File Name or Beds. Try Manual
-                            """
-                            manual_match = str(
-                                input(
-                                    fr"{bcolors.WARNING}Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
-                            if manual_match == True or str(manual_match).lower() == 'true':
-                                print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
-                                # ID
-                                locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
-                                open_file = locate_path['File Path'].iloc[0]
-                                app = xw.App(visible=False)
-                                xw.Visible = False
-                                xw.ScreenUpdating = False
-                                xw.Interactive = False
-                                wb = xw.Book(open_file, update_links=False)
-                                wb.sheets("DW Upload").range("B3").value = potential_deal_id
-                                wb.sheets("DW Upload").range("B4").value = 'default'
-                                # wb.save()
-                                wb.close()
-                                app.quit()
-                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
-                                conn.close()
-                                break
-                            else:
-                                print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
-                                conn.close()
+                            print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
+                            conn.close()
+
 
     except:
         print(f"{bcolors.FAIL}***No Possible Match for: {potential_deal_id}***")
