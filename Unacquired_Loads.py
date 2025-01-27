@@ -74,7 +74,8 @@ Key Notes:
 
 """
 
-save_proforma = r"E:\Unacquired"
+save_proforma = r"E:\Unacquired\mapped"
+
 
 # DB Login
 with open('conn_string.json') as login_file:
@@ -141,12 +142,13 @@ Create in-process match logs and export to csv for review
 current_date = datetime.now().strftime("%Y-%m-%d")
 csv_path = fr"{save_proforma}\{current_date} - matched_deals.csv" # Save out the matches log
 
-def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
+def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma, note):
     new_row = {
         "Deal ID": deal_id,
         "Beds": in_file_beds,
         "File Name": file_facility_name,
-        "File Path": proforma
+        "File Path": proforma,
+        "Note": note
     }
     # Create Dataframe for each Deal Folder
     df_log = pd.concat([df_log, pd.DataFrame([new_row])], ignore_index=True)
@@ -154,7 +156,7 @@ def matches_log(df_log, deal_id, in_file_beds, file_facility_name, proforma):
     return df_log  # Return the updated dataframe
 
 # Log files that have already been matched
-df_log = pd.DataFrame(columns=["Deal ID", "Beds", "File Name", "File Path"])
+df_log = pd.DataFrame(columns=["Deal ID", "Beds", "File Name", "File Path", "Note"])
 
 """
 Start of Processing and File Loops
@@ -163,19 +165,19 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 for potential_deal in df1['facility_name']: # Loop through all deals as there will be duplicate names but unique deals tied to them
     # Is the load already pushed to the table? Stop the proforma that already exists
-    
     deal_data = df1[df1['facility_name'] == potential_deal]
     potential_deal_path = deal_data['file_path'].iloc[0]
-    potential_deal_id = deal_data['id'].iloc[0]
-    
-    if potential_deal_id in df2['acquisition_id']:
-        continue
-    
+    potential_deal_id = int(deal_data['id'].iloc[0])
+
     try:
         if potential_deal_path is not None:
             pass
         else:
-            print(f"Deal: {potential_deal} no file path.")
+            print(f"{bcolors.ENDC}Deal: {potential_deal} no file path.")
+            continue
+
+        # Do not load ID's already in system
+        if potential_deal_id in df2['acquisition_id'].values:
             continue
 
         # Extract the licensed_op_beds value from that row
@@ -187,21 +189,25 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
             print()
             print(f"{bcolors.FAIL}Facility: {potential_deal} not found in the DataFrame.\n")
 
-        # for example: P:\PACS\Finance\Acquistions & New Build\Active\2024 - RealSG AZ-4\Proforma
-
-        # Extract the file information
+        # Loop through files and find the right folder
         for files in glob(potential_deal_path):
+
             proformas_path = fr"{potential_deal_path}\*Proforma.xlsx"
+
+            try:
+                os.path.exists(proformas_path)
+            except:
+                proformas_path = fr"{potential_deal_path}\*proforma.xlsx"
+
             print(f"{bcolors.OKGREEN}Looping Through Files in Folder")
 
             files_in_folder = []
             df_excel = pd.DataFrame(columns=["In File Name", "Beds", "File Name", "File Path"])
-
-
             for proforma in glob(proformas_path):
                 proforma_file = os.path.basename(proforma)
                 proforma_file = proforma_file.replace('.xlsx', '')
-                file_facility_name = proforma_file.split(" - ")[1] if len(proforma_file.split(" - ")) > 1 else None
+                match = re.search(r'\d+\s*-\s*([^-\n\r]+)\s*-\s*Proforma', proforma_file)
+                file_facility_name = match.group(1).strip() if match else None  # Extract and clean the name
                 files_in_folder.append(file_facility_name)
 
                 # Extract the exact details from the excel workbook
@@ -212,15 +218,45 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
 
                 # Forecast or Budget Worksheet
                 try:
+                    # Query for 'FACILITY INFO' layer
                     query_str = fr"""SELECT * FROM st_read('{proforma}', layer='FACILITY INFO');"""
                     df_file = conn.execute(query_str).df()
 
-                except:
-                    continue
+                    # Extract file name
+                    in_file_name = df_file.iloc[6, 1]
 
+                    # Extract SNF Beds
+                    try:
+                        snf_beds = float(df_file.iloc[9, 1])
+                    except (ValueError, IndexError, TypeError):
+                        snf_beds = 0
 
-                in_file_name = df_file.iloc[6, 1]
-                in_file_beds = float(df_file.iloc[9, 1])
+                    # Extract ALF Beds
+                    try:
+                        alf_beds = float(df_file.iloc[11, 1])
+                    except (ValueError, IndexError, TypeError):
+                        alf_beds = 0
+
+                    # Calculate total beds
+                    in_file_beds = alf_beds + snf_beds
+
+                except Exception as e:
+                    # Handle failure to process 'FACILITY INFO' layer
+                    try:
+                        # Query for 'Facility Overview' layer
+                        query_str = fr"""SELECT * FROM st_read('{proforma}', layer='Facility Overview');"""
+                        df_file = conn.execute(query_str).df()
+                        in_file_name = df_file.iloc[9, 3]
+
+                        # Query for 'Assumptions' layer
+                        query_str = fr"""SELECT * FROM st_read('{proforma}', layer='Assumptions');"""
+                        df_file = conn.execute(query_str).df()
+                        in_file_beds = float(df_file.iloc[10, 2])
+
+                    except Exception as nested_e:
+                        print(f"{bcolors.FAIL} Duckdb Sheet Failure: {nested_e}")
+                        continue
+
                 new_row = {
                     "In File Name": in_file_name,
                     "Beds": in_file_beds,
@@ -244,7 +280,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                 """
                 1. Proforma -> File Name 
                 """
-                match_1 = FacilityNameMatcher.match_facility_name(potential_deal, files_in_folder, threshold=98)
+                match_1 = FacilityNameMatcher.match_facility_name(potential_deal, files_in_folder, threshold=97)
                 if match_1[0] is not None:  # Check explicitly if match is not None
                     matched_value = match_1[0]
 
@@ -254,20 +290,20 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                     """
                     1. Proforma -> File Name -> Bed
                     """
-                    if abs(potential_deal_beds - file_beds) < 6:
+                    if abs(potential_deal_beds - file_beds) < 2:
                         # Lower Threshold Based on Bed Count Proximity, Drill Down to In-File Name
                         """
                         1. Proforma -> File Name -> Bed -> In File Name
                         """
                         file_name_choices = temp_df['In File Name'].to_list()
-                        match_5 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=95)
+                        match_5 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=92)
                         if match_5[0] is not None:  # Check explicitly if match is not None
                             in_file_name_match = match_5[0]
                             # If there a duplicate In File Names from the files
                             in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             if index == in_file_index:
                                 print(
-                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
+                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{in_file_beds}")
                             else:
                                 conn.close()
                                 continue
@@ -279,42 +315,52 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                             xw.ScreenUpdating = False
                             xw.Interactive = False
                             wb = xw.Book(open_file, update_links=False)
+                            sheet = wb.sheets("DW Upload")
+                            sheet.api.Unprotect(Password="PGHCbudget!")
                             wb.sheets("DW Upload").range("B3").value = potential_deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
+                            potential_deal = re.sub(r'[^a-zA-Z0-9-_]', '', potential_deal)
                             wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                             wb.close()
                             app.quit()
                             # create a matches log
-                            df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                            note = ""
+                            df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma, note)
                             conn.close()
                             break
                         # If No Match, Flag and Manually Determine
                         else:
-                            """
-                            2. Proforma -> In File Name -> Bed -> Manual
-                            """
-                            manual_match = str(
-                                input(
-                                    fr"{bcolors.WARNING} Deal:{potential_deal} -> {in_file_name}, is it a match? True or False"))
-
-                            if manual_match == True or str(manual_match).lower() == 'true':
-                                print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
-                                # ID
-                                locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
-                                open_file = locate_path['File Path'].iloc[0]
-                                app = xw.App(visible=False)
-                                xw.Visible = False
-                                xw.ScreenUpdating = False
-                                xw.Interactive = False
-                                wb = xw.Book(open_file, update_links=False)
-                                wb.sheets("DW Upload").range("B3").value = potential_deal_id
-                                wb.sheets("DW Upload").range("B4").value = 'default'
-                                wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
-                                wb.close()
-                                app.quit()
-                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
-                                conn.close()
-                                break
+                            # 2. Proforma -> In File Name -> Bed
+                            if abs(potential_deal_beds - in_file_beds) < 4:
+                                file_name_choices = temp_df['In File Name'].to_list()
+                                in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
+                                if index == in_file_index:
+                                    print(
+                                        f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{in_file_beds}")
+                                    # ID
+                                    locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
+                                    open_file = locate_path['File Path'].iloc[0]
+                                    app = xw.App(visible=False)
+                                    xw.Visible = False
+                                    xw.ScreenUpdating = False
+                                    xw.Interactive = False
+                                    wb = xw.Book(open_file, update_links=False)
+                                    sheet = wb.sheets("DW Upload")
+                                    sheet.api.Unprotect(Password="PGHCbudget!")
+                                    wb.sheets("DW Upload").range("B3").value = potential_deal_id
+                                    wb.sheets("DW Upload").range("B4").value = 'default'
+                                    potential_deal = re.sub(r'[^a-zA-Z0-9-_]', '', potential_deal)
+                                    wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
+                                    wb.close()
+                                    app.quit()
+                                    note = "Fix In-File Name"
+                                    df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma, note)
+                                    print("In File Name, Wrong. Fix")
+                                    conn.close()
+                                    break
+                                else:
+                                    conn.close()
+                                    continue
                             else:
                                 print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
                                 conn.close()
@@ -326,14 +372,14 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                         3. Proforma -> File Name -> In File Name. Beds were not close but try to match
                         """
                         file_name_choices = temp_df['In File Name'].to_list()
-                        match_4 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=95)
+                        match_4 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=90)
                         if match_4[0] is not None:  # Check explicitly if match is not None
                             in_file_name_match = match_4[0]
                             index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             if index == in_file_index:
                                 print(
-                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
+                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{in_file_beds}")
                             else:
                                 conn.close()
                                 continue
@@ -345,12 +391,16 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                             xw.ScreenUpdating = False
                             xw.Interactive = False
                             wb = xw.Book(open_file, update_links=False)
+                            sheet = wb.sheets("DW Upload")
+                            sheet.api.Unprotect(Password="PGHCbudget!")
                             wb.sheets("DW Upload").range("B3").value = potential_deal_id
                             wb.sheets("DW Upload").range("B4").value = 'default'
+                            potential_deal = re.sub(r'[^a-zA-Z0-9-_]', '', potential_deal)
                             wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                             wb.close()
                             app.quit()
-                            df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                            note = ""
+                            df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma, note)
                             conn.close()
                             break
                         else:
@@ -363,7 +413,7 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                     2. Proforma -> In File name
                     """
                     file_name_choices = df_excel['In File Name'].to_list()
-                    match_2 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=85)
+                    match_2 = FacilityNameMatcher.match_facility_name(potential_deal, file_name_choices, threshold=93)
                     if match_2[0] is not None:  # Check explicitly if match is not None
                         in_file_name_match = match_2[0]
                         temp_df = df_excel[df_excel['In File Name'] == in_file_name_match]
@@ -374,12 +424,12 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                         """
                         2. Proforma -> In File Name -> Bed
                         """
-                        if abs(potential_deal_beds - in_file_beds) < 6:
+                        if abs(potential_deal_beds - in_file_beds) < 4:
                             file_name_choices = temp_df['In File Name'].to_list()
                             in_file_index = df_excel[df_excel['In File Name'] == in_file_name_match].index[0]
                             if index == in_file_index:
                                 print(
-                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{file_beds}")
+                                    f"{bcolors.OKGREEN}Found Match:{bcolors.OKBLUE} {in_file_name_match}{bcolors.OKGREEN}, {bcolors.OKBLUE}{in_file_beds}")
                                 # ID
                                 locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
                                 open_file = locate_path['File Path'].iloc[0]
@@ -388,42 +438,48 @@ for potential_deal in df1['facility_name']: # Loop through all deals as there wi
                                 xw.ScreenUpdating = False
                                 xw.Interactive = False
                                 wb = xw.Book(open_file, update_links=False)
+                                sheet = wb.sheets("DW Upload")
+                                sheet.api.Unprotect(Password="PGHCbudget!")
                                 wb.sheets("DW Upload").range("B3").value = potential_deal_id
                                 wb.sheets("DW Upload").range("B4").value = 'default'
+                                potential_deal = re.sub(r'[^a-zA-Z0-9-_]', '', potential_deal)
                                 wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
                                 wb.close()
                                 app.quit()
-                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                                note = ""
+                                df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma, note)
                                 conn.close()
                                 break
                             else:
+
                                 """
                                 2. Proforma -> In File Name -> Bed -> Manual
                                 """
-                                manual_match = str(
-                                    input(
-                                        fr"{bcolors.WARNING}Deal:{potential_deal} -> {in_file_name}, is it a match? True or False: "))
-                                if manual_match == True or str(manual_match).lower() == 'true':
-                                    print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
-                                    # ID
-                                    locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
-                                    open_file = locate_path['File Path'].iloc[0]
-                                    app = xw.App(visible=False)
-                                    xw.Visible = False
-                                    xw.ScreenUpdating = False
-                                    xw.Interactive = False
-                                    wb = xw.Book(open_file, update_links=False)
-                                    wb.sheets("DW Upload").range("B3").value = potential_deal_id
-                                    wb.sheets("DW Upload").range("B4").value = 'default'
-                                    wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
-                                    wb.close()
-                                    app.quit()
-                                    df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
-                                    conn.close()
-                                    break
-                                else:
-                                    print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
-                                    conn.close()
+                                # manual_match = str(
+                                #     input(
+                                #         fr"{bcolors.WARNING}Deal:{potential_deal} -> {in_file_name}, is it a match? True or False: "))
+                                # if manual_match == True or str(manual_match).lower() == 'true':
+                                #     print(f"{bcolors.OKGREEN}Using 'Manual': Match Found\n")
+                                #     # ID
+                                #     locate_path = df_excel[df_excel['In File Name'] == in_file_name_match]
+                                #     open_file = locate_path['File Path'].iloc[0]
+                                #     app = xw.App(visible=False)
+                                #     xw.Visible = False
+                                #     xw.ScreenUpdating = False
+                                #     xw.Interactive = False
+                                #     wb = app.books.open(open_file, update_links=False)
+                                #     wb.sheets("DW Upload").range("B3").value = potential_deal_id
+                                #     wb.sheets("DW Upload").range("B4").value = 'default'
+                                #     potential_deal = re.sub(r'[^a-zA-Z0-9-_]', '', potential_deal)
+                                #     wb.save(fr"{save_proforma}\{potential_deal_id} - {potential_deal}.xlsx")
+                                #     wb.close()
+                                #     app.quit()
+                                #     df_log = matches_log(df_log, potential_deal_id, in_file_beds, file_facility_name, proforma)
+                                #     conn.close()
+                                #     break
+
+                                print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
+                                conn.close()
 
                         else:
                             print(f"{bcolors.FAIL}***{potential_deal} Did NOT Match: {file_facility_name}***")
